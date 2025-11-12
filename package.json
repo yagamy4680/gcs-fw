@@ -1,0 +1,44 @@
+{
+  "name": "gcs-fw-hub",
+  "version": "1.0.0",
+  "description": "RPI4/CM4 Firmware development for GCS / GCS Proxy",
+  "main": "index.js",
+  "directories": {
+    "lib": "lib",
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://gitea.t2t.io/drone/gcs-fw.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://gitea.t2t.io/drone/gcs-fw/issues"
+  },
+  "homepage": "https://gitea.t2t.io/drone/gcs-fw#readme",
+  "dependencies": {
+    "@bower_components/bootstrap": "twbs/bootstrap#v5.3.3",
+    "@bower_components/bootstrap-icons": "twbs/icons#v1.11.3",
+    "@bower_components/jquery": "jquery/jquery-dist#3.7.1",
+    "@colors/colors": "^1.6.0",
+    "@influxdata/influxdb-client": "^1.35.0",
+    "better-sqlite3": "^12.4.1",
+    "binary-parser": "^2.2.1",
+    "dot-prop": "^10.1.0",
+    "express": "^4.21.2",
+    "handlebars": "^4.7.8",
+    "js-yaml": "^4.1.0",
+    "node-mavlink": "^2.3.0",
+    "pino": "^10.1.0",
+    "pino-pretty": "^13.1.2",
+    "serialport": "^13.0.0",
+    "socket.io": "^4.8.1",
+    "socket.io-client": "^4.8.1",
+    "yargs": "^18.0.0"
+  }
+}
