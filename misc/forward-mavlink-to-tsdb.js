@@ -20,9 +20,13 @@ const { Writable, PassThrough } = require('stream');
 const { InfluxDB, Point } = require('@influxdata/influxdb-client');
 
 
-const PORT = 47269; // Port of the UDP server
-const HOST = 'localhost'; // IP address or hostname of the UDP server
+const PORT = 47269; // Port of the TelePlot server
+const HOST = 'localhost'; // IP address or hostname of the TelePlot server
 
+const HOME_COORDINATE = {
+  latitude: 25.00580246312236,
+  longitude: 121.46403406856942,
+};
 
 /**
  * 1. Connect to WebSocket server as client, with given `host` and `port`. Note, the channel is always `/serial`.
@@ -206,9 +210,58 @@ const MAVLINK_MSG_HANDLER_MAP = {
   ATTITUDE: {
     process_data: (data) => data,
     exclude_fields: ['timeBootMs'],
-  }
-};
+  },
 
+  // {
+  //   "timeBootMs": 811163,
+  //   "lat": 250064020,
+  //   "lon": 1214635890,
+  //   "alt": 71650,
+  //   "relativeAlt": -4311,
+  //   "vx": 0,
+  //   "vy": 0,
+  //   "vz": -1,
+  //   "hdg": 19018
+  // }
+  GLOBAL_POSITION_INT: {
+    process_data: (data, cached_context = null) => {
+      let lat = data['lat'] = data.lat / 1e7; // 10000000
+      let lon = data['lon'] = data.lon / 1e7;
+      let distance = data['distance_from_home'] = calcCrow(lat, lon, HOME_COORDINATE.latitude, HOME_COORDINATE.longitude) * 1000; // in meters
+      if (cached_context) {
+        cached_context.latitude = lat;
+        cached_context.longitude = lon;
+        cached_context.distance_from_home = distance;
+      }
+      return data;
+    },
+    exclude_fields: ['timeBootMs'],
+  },
+
+  // {
+  //   "timeUsec": 836043000,
+  //   "fixType": 4,
+  //   "lat": 250065755,
+  //   "lon": 1214629496,
+  //   "alt": 129430,
+  //   "eph": 1253,
+  //   "epv": 666,
+  //   "vel": 180,
+  //   "cog": 33770,
+  //   "satellitesVisible": 5,
+  //   "altEllipsoid": 146348,
+  //   "hAcc": 49903,
+  //   "vAcc": 33172,
+  //   "velAcc": 4152,
+  //   "hdgAcc": 0,
+  //   "yaw": 0
+  // }
+  GPS_RAW_INT: {
+    process_data: (data) => data,
+    exclude_fields: ['timeUsec'],
+  },
+
+};
 
 // create a registry of mappings between a message id and a data class
 const REGISTRY = {
@@ -216,6 +269,30 @@ const REGISTRY = {
   ...common.REGISTRY,
   ...ardupilotmega.REGISTRY,
 };
+
+// Inspired by https://stackoverflow.com/questions/18883601/function-to-calculate-distance-between-two-coordinates
+//
+// Converts numeric degrees to radians
+function toRad(Value) {
+  return Value * Math.PI / 180;
+}
+
+//This function takes in latitude and longitude of two location and returns the distance between them as the crow flies (in km)
+function calcCrow(lat1, lon1, lat2, lon2) {
+  var R = 6371; // km
+  var dLat = toRad(lat2 - lat1);
+  var dLon = toRad(lon2 - lon1);
+  var lat1 = toRad(lat1);
+  var lat2 = toRad(lat2);
+
+  var a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.sin(dLon / 2) * Math.sin(dLon / 2) * Math.cos(lat1) * Math.cos(lat2);
+  var c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  var d = R * c;
+  return d;
+}
+
+
 
 class MavLinkDumper {
   constructor(systemId = 255, componentId = 190, writeClient = null, name = 'GCS', verbose = false, teleplot_address = null) {
@@ -227,6 +304,7 @@ class MavLinkDumper {
     this.teleplot_address = teleplot_address;
     this.teleplot_socket = null;
     this.ignore_message_map = {};
+    this.cached_context = {};
     this.uart = 'unknown';
     this.tx_splitter = new MavLinkPacketSplitter();
     this.tx_parser = new MavLinkPacketParser();
@@ -276,7 +354,7 @@ class MavLinkDumper {
   }
 
   process_metric(data, clazz, direction, ts = Date.now()) {
-    let { writeClient, teleplot_socket } = this;
+    let { writeClient, teleplot_socket, cached_context } = this;
     if (!writeClient) return false;
     const metric = `mav_${clazz.MSG_NAME}`;
     const handler = MAVLINK_MSG_HANDLER_MAP[clazz.MSG_NAME];
@@ -289,7 +367,7 @@ class MavLinkDumper {
     // console.log(`[${direction}] ${metric} @ ${this.name}`);
     // console.log(context);
     if (handler.process_data) {
-      new_data = handler.process_data(new_data);
+      new_data = handler.process_data(new_data, cached_context);
     }
     // console.log(new_data);
     const point = new Point(metric)
@@ -335,6 +413,8 @@ class MavLinkDumper {
     } catch (error) {
       console.error('Error flushing write client:', error);
     }
+    let { latitude, longitude, distance_from_home } = this.cached_context;
+    console.log(`\nFlushed to TSDB. Current position: lat=${latitude.toString().red}, lon=${longitude.toString().red}, distance from home=${distance_from_home.toFixed(3).blue}m\n`);
   }
 
   dump_message(message, direction = '->', color = 'white') {
