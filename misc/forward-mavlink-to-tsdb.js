@@ -9,7 +9,9 @@
  */
 'use strict';
 
+const dgram = require('dgram');
 const fs = require('fs');
+
 const colors = require('@colors/colors');
 const yargs = require('yargs');
 const io = require('socket.io-client');
@@ -17,12 +19,16 @@ const { MavLinkPacketSplitter, MavLinkPacketParser, MavLinkPacketRegistry, minim
 const { Writable, PassThrough } = require('stream');
 const { InfluxDB, Point } = require('@influxdata/influxdb-client');
 
+
+const PORT = 47269; // Port of the UDP server
+const HOST = 'localhost'; // IP address or hostname of the UDP server
+
+
 /**
  * 1. Connect to WebSocket server as client, with given `host` and `port`. Note, the channel is always `/serial`.
  * 2. Listen to `from_serial`, `to_serial`, and `status` events, and dump them to console.
  * 3. The `host` and `port` are given as command line arguments, parsed by yargs library.
  */
-
 
 const MAVLINK_MSG_HANDLER_MAP = {
 
@@ -212,12 +218,14 @@ const REGISTRY = {
 };
 
 class MavLinkDumper {
-  constructor(systemId = 255, componentId = 190, writeClient = null, name = 'GCS', verbose = false) {
+  constructor(systemId = 255, componentId = 190, writeClient = null, name = 'GCS', verbose = false, teleplot_address = null) {
     this.systemId = systemId;
     this.componentId = componentId;
     this.writeClient = writeClient;
     this.name = name;
     this.verbose = verbose;
+    this.teleplot_address = teleplot_address;
+    this.teleplot_socket = null;
     this.ignore_message_map = {};
     this.uart = 'unknown';
     this.tx_splitter = new MavLinkPacketSplitter();
@@ -231,6 +239,16 @@ class MavLinkDumper {
     this.tx_parser.on('data', (message) => this.on_tx_message(message));
     this.rx_parser.on('data', (message) => this.on_rx_message(message));
     this.timer = setInterval(async () => await this.flush(), 5 * 1000);
+
+    if (teleplot_address) {
+      let [host, port] = teleplot_address.split(':');
+      host = host || HOST;
+      port = port || PORT;
+      port = 'string' == typeof port ? parseInt(port) : port;
+      this.teleplot_socket = dgram.createSocket('udp4');
+      this.teleplot_host = host;
+      this.teleplot_port = port;
+    }
   }
 
   set_ignore_messages(ignore_message_map) {
@@ -258,9 +276,9 @@ class MavLinkDumper {
   }
 
   process_metric(data, clazz, direction, ts = Date.now()) {
-    let { writeClient } = this;
+    let { writeClient, teleplot_socket } = this;
     if (!writeClient) return false;
-    const metric = `mavlink_${clazz.MSG_NAME}`;
+    const metric = `mav_${clazz.MSG_NAME}`;
     const handler = MAVLINK_MSG_HANDLER_MAP[clazz.MSG_NAME];
     if (!handler) return false;
     let context = {};
@@ -292,6 +310,22 @@ class MavLinkDumper {
       }
     }
     writeClient.writePoint(point);
+    if (teleplot_socket) {
+      let { teleplot_host, teleplot_port } = this;
+      let lines = [];
+      for (let key in new_data) {
+        let value = new_data[key];
+        lines.push(`${clazz.MSG_NAME.toLowerCase()}_${key}:${value}|np`);
+        // lines.push(`${metric.toLowerCase()}_${key}:${value}|np`);
+      }
+      let text = lines.join('\n');
+      let message = Buffer.from(text);
+      teleplot_socket.send(message, 0, message.length, teleplot_port, teleplot_host, (err, bytes) => {
+        if (err) {
+          console.error('Error sending to Teleplot server:', err);
+        }
+      });
+    }
     return true;
   }
 
@@ -384,6 +418,13 @@ const argv = yargs()
     demandOption: false,
     type: 'string'
   })
+  .option('teleplot_address', {
+    alias: 't',
+    describe: 'The Teleplot server address, such as localhost:47269',
+    demandOption: false,
+    type: 'string',
+    default: null
+  })
   .help()
   .parse(process.argv.slice(2));
 
@@ -393,7 +434,7 @@ const client = new InfluxDB({ url: URL, token: TOKEN });
 const ORG = `f908686d9d548c82`; // t2t organization
 const BUCKET = `tt-dev-90d`;
 let writeClient = client.getWriteApi(ORG, BUCKET, 'ms');
-const dumper = new MavLinkDumper(255, 255, writeClient, argv.name, argv.verbose);
+const dumper = new MavLinkDumper(255, 255, writeClient, argv.name, argv.verbose, argv.teleplot_address);
 
 if (argv.exclude_conf) {
   try {
@@ -410,7 +451,6 @@ if (argv.exclude_conf) {
     console.error('Error reading exclude config file:', error);
   }
 }
-
 
 // Build WebSocket URL
 const url = `ws://${argv.host}:${argv.port}/serial`;
