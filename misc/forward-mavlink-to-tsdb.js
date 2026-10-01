@@ -537,12 +537,15 @@ const argv = yargs()
   .help()
   .parse(process.argv.slice(2));
 
-const TOKEN = 'FGlr6C1xcarf6fh__qSFaCG7reLfEag3t3_ETAbY4ikmh_rnno4d2xc3CDhCd9-ItmeOi_IAvR87bj3x1AkXWw==';
-const URL = 'https://tsdb.t2t.io';
-const client = new InfluxDB({ url: URL, token: TOKEN });
-const ORG = `f908686d9d548c82`; // t2t organization
-const BUCKET = `tt-dev-90d`;
-let writeClient = client.getWriteApi(ORG, BUCKET, 'ms');
+const { API_TOKEN, TSDB_URL, TSDB_ORG, TSDB_BUCKET } = process.env;
+
+if (!API_TOKEN) {
+  console.error('API_TOKEN environment variable is required.');
+  process.exit(1);
+}
+
+const client = new InfluxDB({ url: TSDB_URL, token: API_TOKEN });
+let writeClient = client.getWriteApi(TSDB_ORG, TSDB_BUCKET, 'ms');
 const dumper = new MavLinkDumper(255, 255, writeClient, argv.name, argv.verbose, argv.teleplot_address);
 
 if (argv.exclude_conf) {
