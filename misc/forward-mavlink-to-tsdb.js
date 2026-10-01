@@ -271,6 +271,8 @@ const REGISTRY = {
 };
 
 // Inspired by https://stackoverflow.com/questions/18883601/function-to-calculate-distance-between-two-coordinates
+//             https://www.movable-type.co.uk/scripts/latlong.html
+//             https://en.wikipedia.org/wiki/Haversine_formula
 //
 // Converts numeric degrees to radians
 function toRad(Value) {
@@ -316,7 +318,12 @@ class MavLinkDumper {
     this.rx_splitter.on('data', (packet) => this.on_rx_packet(packet));
     this.tx_parser.on('data', (message) => this.on_tx_message(message));
     this.rx_parser.on('data', (message) => this.on_rx_message(message));
-    this.timer = setInterval(async () => await this.flush(), 5 * 1000);
+    this.tx_bytes = 0;
+    this.rx_bytes = 0;
+    this.tx_messages = 0;
+    this.rx_messages = 0;
+    this.flush_timer = setInterval(async () => await this.flush(), 5 * 1000);
+    this.metric_timer = setInterval(async () => await this.on_meteric_timeout(), 1000);
 
     if (teleplot_address) {
       let [host, port] = teleplot_address.split(':');
@@ -338,10 +345,12 @@ class MavLinkDumper {
   }
 
   feed_tx(data) {
+    this.tx_bytes += data.length;
     this.tx_splitter.write(data);
   }
 
   feed_rx(data) {
+    this.rx_bytes += data.length;
     this.rx_splitter.write(data);
   }
 
@@ -351,6 +360,24 @@ class MavLinkDumper {
 
   on_rx_packet(packet) {
 
+  }
+
+  async on_meteric_timeout() {
+    let { tx_bytes, rx_bytes, tx_messages, rx_messages } = this;
+    this.tx_bytes = 0;
+    this.rx_bytes = 0;
+    this.tx_messages = 0;
+    this.rx_messages = 0;
+    const now = Date.now();
+    const point = new Point('mavlink_metrics')
+      .timestamp(now)
+      .tag('gcs', this.name)
+      .tag('category', 'mavlink')
+      .intField('tx_bytes_per_sec', tx_bytes)
+      .intField('rx_bytes_per_sec', rx_bytes)
+      .intField('tx_messages_per_sec', tx_messages)
+      .intField('rx_messages_per_sec', rx_messages);
+    this.writeClient.writePoint(point);
   }
 
   process_metric(data, clazz, direction, ts = Date.now()) {
@@ -455,10 +482,12 @@ class MavLinkDumper {
   }
 
   on_tx_message(message) {
+    this.tx_messages += 1;
     this.dump_message(message, '<-', 'red');
   }
 
   on_rx_message(message) {
+    this.rx_messages += 1;
     this.dump_message(message, '->');
   }
 }
